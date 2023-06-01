@@ -106,3 +106,90 @@ syscall(void){
 grade 结果：
 
 ![](./image/trace.png)
+
+### **Exercise2** System call sysinfo
+任务：
+
+实现系统调用sysinfo，sysinfo接受一个指向struct sysinfo 的指针，统计空闲内存和当前进程数，并写入sysinfo中
+
+代码：
+
+增加系统调用的方法不再赘述
+
+在/kernel/sysproc.c中实现sys_sysinfo函数
+
+```c
++
++uint64
++sys_sysinfo(void){
++  uint64 p;
++  if(argaddr(0,&p)<0){
++    return -1;
++  }
++  struct sysinfo sif;
++  sif.freemem = free_space_amout();
++  sif.nproc = pro_num();
++  if(copyout(myproc()->pagetable,p,(char*)&sif,sizeof(sif))<0){
++    return -1;
++  }
++  return 0;
+ }
+```
+
+其中调用了free_space_amout函数统计了空闲内存，调用了pro_num函数统计了当前进程数，并且调用copyout函数将sysinfo拷贝到了用户空间中
+
+free_space_amout实现在/kernel/kalloc.c文件中
+
+```c
++uint64 free_space_amout(){
++  uint64 ret = 0;
++  acquire(&kmem.lock);
++  struct run *r = kmem.freelist;
++  while(r){
++    ret += PGSIZE;
++    r = r->next;
++  }
++  release(&kmem.lock);
++  return ret;
++}
+```
+
+原理是遍历了空闲内存链表，统计空闲内存字节数
+
+pro_num函数实现在/kernel/proc.c文件中
+
+```c
++uint64
++pro_num(){
++  struct proc *p;
++  uint64 ret = 0;
++  for(p = proc; p<&proc[NPROC];p++){
++    if(p->state != UNUSED){
++      ret++;
++    }
++  }
++  return ret;
++}
++
+```
+原理是遍历了proc数组，统计了所有状态不为UNUSED状态的进程
+
+同时，需要在/kernel/defs.h中声明free_space_amout函数和pro_num函数
+
+```c
+ // kalloc.c
++uint64          free_space_amout();
+ void*           kalloc(void);
+ void            kfree(void *);
+ void            kinit(void);
+
+ // proc.c
++uint64          pro_num();
+ int             cpuid(void);
+ void            exit(int);
+ int             fork(void);
+```
+
+grade 结果:
+
+![](./image/sysinfo.png)
