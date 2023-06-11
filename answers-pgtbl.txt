@@ -1,0 +1,4 @@
+answer1:
+
+answer2:
+the first two test can not catch the case when `srcva + len` overflows uint64, the third one works.the first two test can not catch the case when `srcva + len` overflows uint64, the third one works.
