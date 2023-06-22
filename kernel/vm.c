@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -15,6 +17,9 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+int refcount[(uint64)(PHYSTOP-KERNBASE)/PGSIZE] = {0};
+
+extern struct spinlock refcountlock; 
 /*
  * create a direct-map page table for the kernel.
  */
@@ -311,7 +316,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -319,14 +323,16 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    if(*pte & PTE_W){
+      *pte = ((*pte)|PTE_COW)&(~PTE_W);
+    }
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
       goto err;
     }
+    acquire(&refcountlock);
+    refcount[(pa-KERNBASE)/PGSIZE]++;
+    release(&refcountlock);
   }
   return 0;
 
@@ -357,6 +363,9 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   uint64 n, va0, pa0;
 
   while(len > 0){
+    if(shouldrealcopy(dstva)){
+        realcopy(dstva);
+    }
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
@@ -439,4 +448,39 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+
+int shouldrealcopy(uint64 va){
+  struct proc* p = myproc();
+  pte_t* pte;
+  return (va<p->sz) 
+  && ((pte=walk(p->pagetable, va, 0)) != 0)
+  && (*pte & PTE_V)
+  && (*pte & PTE_COW);
+}
+
+int realcopy(uint64 va){
+  struct proc* p = myproc();
+  va = PGROUNDDOWN(va);
+  pte_t *pte = walk(p->pagetable,va,0);
+  uint flags = PTE_FLAGS(*pte);
+  char *old_pa = (char *)PTE2PA(*pte);
+  acquire(&refcountlock);
+  if(refcount[((uint64)old_pa-KERNBASE)/PGSIZE]==1){
+    *pte = (*pte|PTE_W)&(~PTE_COW);
+    release(&refcountlock);
+    return 0;
+  }
+  char *new_pa = kalloc();
+  if(new_pa == 0){
+    release(&refcountlock);
+    return -1;
+  }
+
+  memmove(new_pa, old_pa, PGSIZE);
+  *pte = (PA2PTE(new_pa)|flags|PTE_W)&(~PTE_COW);
+  refcount[((uint64)old_pa-KERNBASE)/PGSIZE]--;
+  release(&refcountlock);
+  return 0;
 }
