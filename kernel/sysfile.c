@@ -15,6 +15,8 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "buf.h"
+#define MAXFOLLOWLEVEL = 10
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -304,11 +306,33 @@ sys_open(void)
       return -1;
     }
   } else {
-    if((ip = namei(path)) == 0){
-      end_op();
-      return -1;
+    int follow_depth = 0;
+    while(1){
+      if((ip = namei(path)) == 0){
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+      if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
+        if(follow_depth>10){
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        else{
+          if(readi(ip,0,(uint64)path,0,MAXPATH)<0){
+            iunlockput(ip);
+            end_op();
+            return -1;
+          }
+          follow_depth++;
+          iunlockput(ip);
+        }
+      }
+      else{
+        break;
+      }
     }
-    ilock(ip);
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -484,3 +508,29 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH];
+  char path[MAXPATH];
+  int n;
+  if((n = argstr(0,target,MAXPATH)) < 0 || (n = argstr(1,path,MAXPATH)) < 0)
+    return -1;
+  begin_op();
+  struct inode * ip = create(path,T_SYMLINK,0,0);
+  if(ip==0){
+    end_op();
+    return -1;
+  }
+  
+  if(writei(ip,0,(uint64)target,0,MAXPATH)<0){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+  iunlockput(ip);
+  end_op();
+  return 0;
+} 
+

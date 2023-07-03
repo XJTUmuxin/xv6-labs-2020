@@ -70,7 +70,7 @@ testsymlink(void)
   r = symlink("/testsymlink/a", "/testsymlink/b");
   if(r < 0)
     fail("symlink b -> a failed");
-
+  
   if(write(fd1, buf, sizeof(buf)) != 4)
     fail("failed to write to a");
 
