@@ -5,6 +5,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+
+
 
 struct cpu cpus[NCPU];
 
@@ -133,6 +136,14 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  // set vma
+  for(int i=0;i<16;++i){
+    p->VMAs[i].valid = 0;
+    p->VMAs[i].mapcnt = 0;
+  } 
+
+  p->mmap_va = MAXVA-2*PGSIZE;
 
   return p;
 }
@@ -296,6 +307,13 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  for(int i=0;i<16;++i){
+    if(p->VMAs[i].valid){
+      np->VMAs[i] = p->VMAs[i];
+      filedup(p->VMAs[i].file);
+    }
+  }
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -340,6 +358,25 @@ void
 exit(int status)
 {
   struct proc *p = myproc();
+
+  for( int i=0 ; i<16; i++ )
+   {
+     if( p->VMAs[i].valid == 1 )
+     {
+       struct VMA* vp = &p->VMAs[i];
+       for( uint64 addr = vp->address ; addr < vp->address  + vp->length ; addr += PGSIZE )
+       {
+         if( walkaddr( p->pagetable , addr ) != 0 )
+         {
+           if( vp->flags == MAP_SHARED )
+             filewriteoff( vp->file , addr , PGSIZE , addr-vp->address );
+           uvmunmap( p->pagetable , addr , 1 , 1 );
+         }
+       }
+       fileclose( p->VMAs[i].file );
+       p->VMAs[i].valid = 0;
+     }
+   }
 
   if(p == initproc)
     panic("init exiting");

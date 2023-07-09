@@ -67,6 +67,30 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if((r_scause() == 13 || r_scause() == 15)){
+    uint64 va = r_stval();
+    struct VMA *vma = 0;
+    for(int i=0;i<16;++i){
+      if(p->VMAs[i].valid && va >= p->VMAs[i].address && va<= p->VMAs[i].address+p->VMAs[i].length){
+        vma = &p->VMAs[i];
+        break;
+      }
+    }
+    if(vma){
+      char *mem;
+      mem = kalloc();
+      memset(mem, 0, PGSIZE);
+      if(mappages(p->pagetable, va , PGSIZE, (uint64)mem, PTE_U | PTE_V | (vma->prot)<<1) != 0){
+        kfree(mem);
+        panic("mmap page fault map error");
+      }
+      vma_read(vma,mem,va);
+    }
+    else{
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

@@ -484,3 +484,82 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void){
+  uint64 address,length,offset;
+  int prot,flags,fd;
+  struct file *file;
+
+  if(argaddr(0,&address)<0 || argaddr(1,&length)<0 || argint(2,&prot)<0 
+  || argint(3,&flags)<0 || argfd(4,&fd,&file)<0 || argaddr(5,&offset)<0){
+    return -1;
+  }
+  if((prot & PROT_WRITE) && (flags & MAP_SHARED) && !(file->writable)){
+    return -1;
+  }
+  struct proc *p = myproc();
+  struct VMA *vma = 0;
+  for(int i=0;i<16;++i){
+    if(p->VMAs[i].valid == 0){
+      vma = &p->VMAs[i];
+      break;
+    }
+  }
+  if(vma == 0){
+    panic("no empty vma");
+  }
+  vma->valid = 1;
+  vma->address = p->mmap_va-length;
+  vma->length = length;
+  vma->file = file;
+  vma->prot = prot;
+  vma->flags = flags;
+  vma->offset = offset;
+  vma->mapcnt = length;
+  filedup(file);
+  p->mmap_va -= length;
+
+  return vma->address;
+}
+
+uint64
+sys_munmap(void){
+  uint64 addr,length;
+  if(argaddr(0,&addr)<0 || argaddr(1,&length)<0){
+    return -1;
+  }
+  struct proc *p = myproc();
+  struct VMA *vma = 0;
+  for(int i=0;i<16;++i){
+    if(p->VMAs[i].valid && addr >= p->VMAs[i].address && addr < p->VMAs[i].address+p->VMAs[i].length){
+      vma = &p->VMAs[i];
+      break;
+    }
+  }
+  if(vma == 0){
+    panic("can't find the vma");
+  }
+  if(vma && walkaddr(p->pagetable, addr) != 0){
+    if(vma->flags == MAP_SHARED){
+      // write back
+      filewriteoff(vma->file,addr,length,addr-vma->address);
+    }
+    // uvmunmap
+    uvmunmap(p->pagetable,PGROUNDUP(addr),(length-(PGROUNDUP(addr)-addr))/PGSIZE,1);
+    vma->mapcnt -= length;
+    if(vma->mapcnt==0){
+      fileclose(vma->file);
+      vma->valid = 0;
+    }
+  }
+  return 0;
+}
+
+void vma_read(struct VMA *vma,char* mem,uint64 va){
+  begin_op();
+  ilock((vma->file)->ip);
+  readi(vma->file->ip,0,(uint64)mem,vma->offset+PGROUNDDOWN(va)-vma->address,PGSIZE);
+  iunlock((vma->file)->ip);
+  end_op();
+}
